@@ -69,14 +69,3 @@ jobs:
           name: SecuritySupport-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-
-### 2. अब Commit करें
-
-1. कोड पेस्ट करने के बाद **Commit changes…** दबाएँ।
-2. अगली स्क्रीन पर फिर **Commit changes** दबाकर सेव करें।
-3. Repository में **Actions** टैब खोलें।
-4. `Build Security Support APK` नाम का workflow देखें।
-
-**ध्यान दें:** यह शुरुआती बिल्ड कॉन्फ़िगरेशन है। यदि बिल्ड सफल होता है, तो APK को Actions के रन पेज से डाउनलोड किया जा सकता है। Firebase, Cloudinary, अलग-अलग पेजों के लिंक और अन्य सुविधाओं का APK में परीक्षण अलग से करना होगा।
-
-पहले कोड सेव करें और मुझे बताइए कि **Commit हो गया है या नहीं।**
