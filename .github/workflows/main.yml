@@ -1,0 +1,82 @@
+name: Build Security Support APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "SecuritySupport.zip"
+      - ".github/workflows/main.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Extract website
+        run: |
+          mkdir -p website
+          unzip -o SecuritySupport.zip -d website
+          find website -name index.html -print
+
+      - name: Locate website root
+        run: |
+          INDEX_FILE=$(find website -name index.html -type f | head -n 1)
+          if [ -z "$INDEX_FILE" ]; then
+            echo "index.html not found in ZIP"
+            exit 1
+          fi
+          WEBSITE_ROOT=$(dirname "$INDEX_FILE")
+          mkdir -p www
+          cp -R "$WEBSITE_ROOT"/. www/
+
+      - name: Create Capacitor project
+        run: |
+          npm init -y
+          npm install @capacitor/core @capacitor/android
+          npm install -D @capacitor/cli
+          npx cap init "Security Support" "com.securitysupport.app" --web-dir www
+          npx cap add android
+
+      - name: Build debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SecuritySupport-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+### 2. अब Commit करें
+
+1. कोड पेस्ट करने के बाद **Commit changes…** दबाएँ।
+2. अगली स्क्रीन पर फिर **Commit changes** दबाकर सेव करें।
+3. Repository में **Actions** टैब खोलें।
+4. `Build Security Support APK` नाम का workflow देखें।
+
+**ध्यान दें:** यह शुरुआती बिल्ड कॉन्फ़िगरेशन है। यदि बिल्ड सफल होता है, तो APK को Actions के रन पेज से डाउनलोड किया जा सकता है। Firebase, Cloudinary, अलग-अलग पेजों के लिंक और अन्य सुविधाओं का APK में परीक्षण अलग से करना होगा।
+
+पहले कोड सेव करें और मुझे बताइए कि **Commit हो गया है या नहीं।**
