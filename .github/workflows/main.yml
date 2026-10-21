@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "Security Support.zip"
+      - "SecuritySupport.zip"
       - ".github/workflows/main.yml"
 
 permissions:
@@ -38,28 +38,17 @@ jobs:
         shell: bash
         run: |
           set -e
-
-          ZIP_FILE="Security Support.zip"
-
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: $ZIP_FILE not found in repository root."
-            echo "Files in repository:"
-            ls -la
-            exit 1
-          fi
-
           mkdir -p website
-          unzip -o "$ZIP_FILE" -d website
+          unzip -o SecuritySupport.zip -d website
 
           INDEX_FILE="$(find website -type f -name index.html | head -n 1)"
 
           if [ -z "$INDEX_FILE" ]; then
-            echo "ERROR: index.html not found in Security Support.zip"
+            echo "ERROR: index.html not found in SecuritySupport.zip"
             exit 1
           fi
 
           WEBSITE_ROOT="$(dirname "$INDEX_FILE")"
-
           mkdir -p www
           cp -R "$WEBSITE_ROOT"/. www/
 
@@ -69,11 +58,9 @@ jobs:
       - name: Create Capacitor project
         run: |
           set -e
-
           npm init -y
-
-          npm install @capacitor/core@7 @capacitor/android@7
-          npm install --save-dev @capacitor/cli@7
+          npm install @capacitor/core@latest @capacitor/android@latest
+          npm install --save-dev @capacitor/cli@latest
 
           npx cap init "Security Support" "com.securitysupport.app" --web-dir www
           npx cap add android
@@ -103,17 +90,8 @@ jobs:
                   }
 
                   WebView webView = getBridge().getWebView();
-                  String url = webView.getUrl();
 
-                  boolean isHome = url != null &&
-                      (url.equals("http://localhost/") ||
-                       url.equals("http://localhost/index.html") ||
-                       url.equals("https://localhost/") ||
-                       url.equals("https://localhost/index.html"));
-
-                  if (isHome) {
-                      finish();
-                  } else if (webView.canGoBack()) {
+                  if (webView.canGoBack()) {
                       webView.goBack();
                   } else {
                       finish();
