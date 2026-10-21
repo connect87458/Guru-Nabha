@@ -2,7 +2,7 @@ name: Build Security Support APK
 
 on:
   workflow_dispatch:
-    push:
+  push:
     paths:
       - "Security Support.zip"
       - ".github/workflows/main.yml"
@@ -38,13 +38,14 @@ jobs:
         shell: bash
         run: |
           set -e
+
           mkdir -p website
           unzip -o "Security Support.zip" -d website
 
           INDEX_FILE="$(find website -type f -name index.html | head -n 1)"
 
           if [ -z "$INDEX_FILE" ]; then
-            echo "ERROR: index.html not found in SecuritySupport.zip"
+            echo "ERROR: index.html not found in Security Support.zip"
             exit 1
           fi
 
