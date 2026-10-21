@@ -2,9 +2,9 @@ name: Build Security Support APK
 
 on:
   workflow_dispatch:
-  push:
+    push:
     paths:
-      - "SecuritySupport.zip"
+      - "Security Support.zip"
       - ".github/workflows/main.yml"
 
 permissions:
@@ -39,7 +39,7 @@ jobs:
         run: |
           set -e
           mkdir -p website
-          unzip -o SecuritySupport.zip -d website
+          unzip -o "Security Support.zip" -d website
 
           INDEX_FILE="$(find website -type f -name index.html | head -n 1)"
 
