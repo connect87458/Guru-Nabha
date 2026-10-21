@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "SecuritySupport.zip"
+      - "Security Support.zip"
       - ".github/workflows/main.yml"
 
 permissions:
@@ -39,13 +39,22 @@ jobs:
         run: |
           set -e
 
+          ZIP_FILE="Security Support.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: $ZIP_FILE not found in repository root."
+            echo "Files in repository:"
+            ls -la
+            exit 1
+          fi
+
           mkdir -p website
-          unzip -o SecuritySupport.zip -d website
+          unzip -o "$ZIP_FILE" -d website
 
           INDEX_FILE="$(find website -type f -name index.html | head -n 1)"
 
           if [ -z "$INDEX_FILE" ]; then
-            echo "ERROR: index.html not found in SecuritySupport.zip"
+            echo "ERROR: index.html not found in Security Support.zip"
             exit 1
           fi
 
@@ -63,8 +72,8 @@ jobs:
 
           npm init -y
 
-          npm install @capacitor/core@latest @capacitor/android@latest
-          npm install --save-dev @capacitor/cli@latest
+          npm install @capacitor/core@7 @capacitor/android@7
+          npm install --save-dev @capacitor/cli@7
 
           npx cap init "Security Support" "com.securitysupport.app" --web-dir www
           npx cap add android
