@@ -1,47 +1,147 @@
-- name: Configure Android Back Button
+name: Build Security Support APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "SecuritySupport.zip"
+      - ".github/workflows/main.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Extract website
+        shell: bash
+        run: |
+          set -e
+          mkdir -p website
+          unzip -o SecuritySupport.zip -d website
+
+          INDEX_FILE="$(find website -type f -name index.html | head -n 1)"
+
+          if [ -z "$INDEX_FILE" ]; then
+            echo "ERROR: index.html not found in SecuritySupport.zip"
+            exit 1
+          fi
+
+          WEBSITE_ROOT="$(dirname "$INDEX_FILE")"
+          mkdir -p www
+          cp -R "$WEBSITE_ROOT"/. www/
+
+          echo "Website files copied successfully."
+
+      - name: Create Capacitor project
+        run: |
+          set -e
+          npm init -y
+          npm install @capacitor/core@7 @capacitor/android@7
+          npm install --save-dev @capacitor/cli@7
+          npm install @capacitor/app@7
+
+          npx cap init "Security Support" "com.securitysupport.app" --web-dir www
+          npx cap add android
+
+      - name: Configure Back Button
         shell: bash
         run: |
           set -e
 
-          mkdir -p android/app/src/main/java/com/securitysupport/app
+          mkdir -p www
 
-          cat > android/app/src/main/java/com/securitysupport/app/MainActivity.java <<'EOF'
-          package com.securitysupport.app;
+          cat > www/back-button.js <<'EOF'
+          document.addEventListener('DOMContentLoaded', function () {
+            if (!window.Capacitor ||
+                !window.Capacitor.isNativePlatform()) {
+              return;
+            }
 
-          import android.os.Bundle;
-          import com.getcapacitor.BridgeActivity;
+            var lastBackPress = 0;
 
-          public class MainActivity extends BridgeActivity {
+            window.Capacitor.Plugins.App.addListener(
+              'backButton',
+              function () {
+                if (window.history.length > 1) {
+                  window.history.back();
+                  return;
+                }
 
-              @Override
-              public void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
+                var now = Date.now();
 
-                  getWindow().setStatusBarColor(
-                      android.graphics.Color.WHITE
+                if (now - lastBackPress < 2000) {
+                  window.Capacitor.Plugins.App.exitApp();
+                } else {
+                  lastBackPress = now;
+
+                  var oldToast = document.getElementById(
+                    'back-exit-toast'
                   );
 
-                  getWindow().setNavigationBarColor(
-                      android.graphics.Color.WHITE
-                  );
-
-                  if (android.os.Build.VERSION.SDK_INT >= 29) {
-                      getWindow().setNavigationBarContrastEnforced(false);
+                  if (oldToast) {
+                    oldToast.remove();
                   }
+
+                  var toast = document.createElement('div');
+                  toast.id = 'back-exit-toast';
+                  toast.textContent = 'Press back again to exit';
+
+                  toast.style.cssText =
+                    'position:fixed;left:50%;bottom:30px;' +
+                    'transform:translateX(-50%);' +
+                    'background:#222;color:#fff;padding:12px 18px;' +
+                    'border-radius:24px;z-index:999999;' +
+                    'font:14px Arial,sans-serif;';
+
+                  document.body.appendChild(toast);
+
+                  setTimeout(function () {
+                    toast.remove();
+                  }, 2000);
+                }
               }
-
-              @Override
-              @SuppressWarnings("deprecation")
-              public void onBackPressed() {
-                  if (getBridge() != null
-                      && getBridge().getWebView() != null
-                      && getBridge().getWebView().canGoBack()) {
-
-                      getBridge().getWebView().goBack();
-
-                  } else {
-                      super.onBackPressed();
-                  }
-              }
-          }
+            );
+          });
           EOF
+
+          cat >> www/index.html <<'EOF'
+          <script src="back-button.js"></script>
+          EOF
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Build debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SecuritySupport-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
