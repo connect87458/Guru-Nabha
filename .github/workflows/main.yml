@@ -1,18 +1,121 @@
-- name: Sync Capacitor
+name: Build Security Support APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "Security Support.zip"
+      - ".github/workflows/main.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Extract website and logo
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p website
+          unzip -o "Security Support.zip" -d website
+
+          INDEX_FILE="$(find website -type f -name index.html | head -n 1)"
+          LOGO_FILE="$(find website -type f -name logo.png | head -n 1)"
+
+          if [ -z "$INDEX_FILE" ]; then
+            echo "ERROR: index.html not found"
+            exit 1
+          fi
+
+          if [ -z "$LOGO_FILE" ]; then
+            echo "ERROR: logo.png not found"
+            exit 1
+          fi
+
+          WEBSITE_ROOT="$(dirname "$INDEX_FILE")"
+
+          mkdir -p www assets
+          cp -R "$WEBSITE_ROOT"/. www/
+          cp "$LOGO_FILE" assets/logo.png
+
+          echo "Website and logo extracted."
+
+      - name: Create Capacitor project
+        run: |
+          set -e
+          npm init -y
+          npm install @capacitor/core@latest @capacitor/android@latest
+          npm install --save-dev @capacitor/cli@latest
+
+          npx cap init "Security Support" "com.securitysupport.app" --web-dir www
+          npx cap add android
+
+      - name: Configure Android Back Button
+        shell: bash
+        run: |
+          set -e
+
+          MAIN_ACTIVITY="android/app/src/main/java/com/securitysupport/app/MainActivity.java"
+          mkdir -p "$(dirname "$MAIN_ACTIVITY")"
+
+          cat > "$MAIN_ACTIVITY" <<'JAVA'
+          package com.securitysupport.app;
+
+          import android.webkit.WebView;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+
+              @Override
+              @SuppressWarnings("deprecation")
+              public void onBackPressed() {
+                  if (getBridge() == null
+                      || getBridge().getWebView() == null) {
+                      super.onBackPressed();
+                      return;
+                  }
+
+                  WebView webView = getBridge().getWebView();
+
+                  if (webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      finish();
+                  }
+              }
+          }
+          JAVA
+
+      - name: Sync Capacitor
         run: npx cap sync android
 
       - name: Apply Security Support Logo
         shell: bash
         run: |
           set -e
-
-          LOGO="assets/logo.png"
-          RES="android/app/src/main/res"
-
-          if [ ! -f "$LOGO" ]; then
-            echo "ERROR: assets/logo.png not found"
-            exit 1
-          fi
 
           npm install --no-save sharp
 
@@ -37,22 +140,22 @@
               const dir = path.join(res, folder);
               fs.mkdirSync(dir, { recursive: true });
 
-              for (const name of ['ic_launcher.png', 'ic_launcher_round.png']) {
+              for (const name of [
+                'ic_launcher.png',
+                'ic_launcher_round.png'
+              ]) {
                 await sharp(source)
-                  .resize(size, size, {
-                    fit: 'contain',
-                    background: { r: 255, g: 255, b: 255, alpha: 1 }
-                  })
+                  .resize(size, size, { fit: 'contain' })
                   .png()
                   .toFile(path.join(dir, name));
               }
             }
 
             const adaptiveDir = path.join(res, 'mipmap-anydpi-v26');
-            fs.mkdirSync(adaptiveDir, { recursive: true });
+            const drawableDir = path.join(res, 'drawable');
 
-            const foregroundDir = path.join(res, 'drawable');
-            fs.mkdirSync(foregroundDir, { recursive: true });
+            fs.mkdirSync(adaptiveDir, { recursive: true });
+            fs.mkdirSync(drawableDir, { recursive: true });
 
             await sharp(source)
               .resize(432, 432, {
@@ -61,25 +164,26 @@
               })
               .png()
               .toFile(
-                path.join(foregroundDir, 'ic_launcher_foreground.png')
+                path.join(drawableDir, 'ic_launcher_foreground.png')
               );
 
             const xml = `<?xml version="1.0" encoding="utf-8"?>
           <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
               <background android:drawable="@android:color/white" />
               <foreground android:drawable="@drawable/ic_launcher_foreground" />
-          </adaptive-icon>
-          `;
+          </adaptive-icon>`;
 
             fs.writeFileSync(
-              path.join(adaptiveDir, 'ic_launcher.xml'), xml
+              path.join(adaptiveDir, 'ic_launcher.xml'),
+              xml
             );
 
             fs.writeFileSync(
-              path.join(adaptiveDir, 'ic_launcher_round.xml'), xml
+              path.join(adaptiveDir, 'ic_launcher_round.xml'),
+              xml
             );
 
-            console.log('Security Support launcher icons applied.');
+            console.log('Launcher icons generated.');
           }
 
           main().catch(error => {
@@ -88,8 +192,26 @@
           });
           NODE
 
+      - name: Set Android app name
+        shell: bash
+        run: |
+          set -e
+
+          STRINGS_FILE="android/app/src/main/res/values/strings.xml"
+
+          if [ -f "$STRINGS_FILE" ]; then
+            sed -i 's/<string name="app_name">[^<]*<\/string>/<string name="app_name">Security Support<\/string>/' "$STRINGS_FILE"
+          fi
+
       - name: Build debug APK
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SecuritySupport-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
