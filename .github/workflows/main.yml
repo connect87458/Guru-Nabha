@@ -43,13 +43,12 @@ jobs:
           unzip -o "Security Support.zip" -d website
 
           INDEX_FILE="$(find website -type f -name index.html | head -n 1)"
+          LOGO_FILE="$(find website -type f -name logo.png | head -n 1)"
 
           if [ -z "$INDEX_FILE" ]; then
             echo "ERROR: index.html not found in Security Support.zip"
             exit 1
           fi
-
-          LOGO_FILE="$(find website -type f -name logo.png | head -n 1)"
 
           if [ -z "$LOGO_FILE" ]; then
             echo "ERROR: logo.png not found in Security Support.zip"
@@ -64,10 +63,7 @@ jobs:
           mkdir -p assets
           cp "$LOGO_FILE" assets/logo.png
 
-          echo "Website files copied successfully."
-          echo "Logo found: $LOGO_FILE"
-
-          ls -la www
+          echo "Website and logo extracted successfully."
 
       - name: Create Capacitor project
         run: |
@@ -80,7 +76,7 @@ jobs:
           npx cap init "Security Support" "com.securitysupport.app" --web-dir www
           npx cap add android
 
-      - name: Generate Android app icons
+      - name: Generate Android launcher icons
         shell: bash
         run: |
           set -e
@@ -92,62 +88,69 @@ jobs:
           const fs = require('fs');
           const path = require('path');
 
-          async function main() {
-            const source = 'assets/logo.png';
-            const base = 'android/app/src/main/res';
+          const source = 'assets/logo.png';
+          const res = 'android/app/src/main/res';
 
-            const icons = [
-              ['mipmap-mdpi', 48],
-              ['mipmap-hdpi', 72],
-              ['mipmap-xhdpi', 96],
-              ['mipmap-xxhdpi', 144],
-              ['mipmap-xxxhdpi', 192]
-            ];
+          async function generate() {
+            const sizes = {
+              'mipmap-mdpi': 48,
+              'mipmap-hdpi': 72,
+              'mipmap-xhdpi': 96,
+              'mipmap-xxhdpi': 144,
+              'mipmap-xxxhdpi': 192
+            };
 
-            for (const [folder, size] of icons) {
-              const dir = path.join(base, folder);
+            for (const [folder, size] of Object.entries(sizes)) {
+              const dir = path.join(res, folder);
               fs.mkdirSync(dir, { recursive: true });
 
-              const image = sharp(source)
-                .resize(size, size, {
-                  fit: 'contain',
-                  background: { r: 255, g: 255, b: 255, alpha: 0 }
-                });
+              await sharp(source)
+                .resize(size, size, { fit: 'contain' })
+                .png()
+                .toFile(path.join(dir, 'ic_launcher.png'));
 
-              await image.clone().png().toFile(
-                path.join(dir, 'ic_launcher.png')
-              );
-
-              await image.clone().png().toFile(
-                path.join(dir, 'ic_launcher_round.png')
-              );
+              await sharp(source)
+                .resize(size, size, { fit: 'contain' })
+                .png()
+                .toFile(path.join(dir, 'ic_launcher_round.png'));
             }
 
-            const anydpi = path.join(base, 'mipmap-anydpi-v26');
-            fs.mkdirSync(anydpi, { recursive: true });
+            const adaptiveDir = path.join(res, 'mipmap-anydpi-v26');
+            fs.mkdirSync(adaptiveDir, { recursive: true });
+
+            const foregroundDir = path.join(res, 'drawable');
+            fs.mkdirSync(foregroundDir, { recursive: true });
+
+            await sharp(source)
+              .resize(432, 432, {
+                fit: 'contain',
+                background: { r: 0, g: 0, b: 0, alpha: 0 }
+              })
+              .png()
+              .toFile(path.join(foregroundDir, 'ic_launcher_foreground.png'));
 
             fs.writeFileSync(
-              path.join(anydpi, 'ic_launcher.xml'),
+              path.join(adaptiveDir, 'ic_launcher.xml'),
               `<?xml version="1.0" encoding="utf-8"?>
           <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
               <background android:drawable="@android:color/white" />
-              <foreground android:drawable="@mipmap/ic_launcher" />
+              <foreground android:drawable="@drawable/ic_launcher_foreground" />
           </adaptive-icon>`
             );
 
             fs.writeFileSync(
-              path.join(anydpi, 'ic_launcher_round.xml'),
+              path.join(adaptiveDir, 'ic_launcher_round.xml'),
               `<?xml version="1.0" encoding="utf-8"?>
           <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
               <background android:drawable="@android:color/white" />
-              <foreground android:drawable="@mipmap/ic_launcher" />
+              <foreground android:drawable="@drawable/ic_launcher_foreground" />
           </adaptive-icon>`
             );
 
-            console.log('Android launcher icons generated.');
+            console.log('Launcher icons generated successfully.');
           }
 
-          main().catch(error => {
+          generate().catch(error => {
             console.error(error);
             process.exit(1);
           });
@@ -159,7 +162,6 @@ jobs:
           set -e
 
           MAIN_ACTIVITY="android/app/src/main/java/com/securitysupport/app/MainActivity.java"
-
           mkdir -p "$(dirname "$MAIN_ACTIVITY")"
 
           cat > "$MAIN_ACTIVITY" <<'JAVA'
@@ -189,6 +191,17 @@ jobs:
               }
           }
           JAVA
+
+      - name: Set Android app name
+        shell: bash
+        run: |
+          set -e
+
+          STRINGS_FILE="android/app/src/main/res/values/strings.xml"
+
+          if [ -f "$STRINGS_FILE" ]; then
+            sed -i 's/<string name="app_name">[^<]*<\/string>/<string name="app_name">Security Support<\/string>/' "$STRINGS_FILE"
+          fi
 
       - name: Sync Capacitor
         run: npx cap sync android
