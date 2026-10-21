@@ -40,12 +40,12 @@ jobs:
           set -e
 
           mkdir -p website
-          unzip -o "Security Support.zip" -d website
+          unzip -o Security Support.zip -d website
 
           INDEX_FILE="$(find website -type f -name index.html | head -n 1)"
 
           if [ -z "$INDEX_FILE" ]; then
-           echo "ERROR: index.html not found in Security Support.zip"
+            echo "ERROR: index.html not found in Security Support.zip"
             exit 1
           fi
 
@@ -54,7 +54,7 @@ jobs:
           mkdir -p www
           cp -R "$WEBSITE_ROOT"/. www/
 
-          echo "Website extracted successfully."
+          echo "Website files copied successfully."
           ls -la www
 
       - name: Create Capacitor project
@@ -63,13 +63,13 @@ jobs:
 
           npm init -y
 
-          npm install @capacitor/core@7 @capacitor/android@7
-          npm install --save-dev @capacitor/cli@7
+          npm install @capacitor/core@latest @capacitor/android@latest
+          npm install --save-dev @capacitor/cli@latest
 
           npx cap init "Security Support" "com.securitysupport.app" --web-dir www
           npx cap add android
 
-      - name: Configure Android Back Button and Layout
+      - name: Configure Android Back Button
         shell: bash
         run: |
           set -e
@@ -79,38 +79,10 @@ jobs:
           cat > android/app/src/main/java/com/securitysupport/app/MainActivity.java <<'EOF'
           package com.securitysupport.app;
 
-          import android.os.Bundle;
-          import android.graphics.Color;
-          import android.view.View;
           import android.webkit.WebView;
-
-          import androidx.core.view.WindowCompat;
-
           import com.getcapacitor.BridgeActivity;
 
           public class MainActivity extends BridgeActivity {
-
-              @Override
-              public void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-
-                  // Keep app content inside the system-bar boundaries.
-                  WindowCompat.setDecorFitsSystemWindows(
-                      getWindow(), true
-                  );
-
-                  getWindow().setStatusBarColor(Color.WHITE);
-                  getWindow().setNavigationBarColor(Color.WHITE);
-
-                  getWindow().getDecorView().setSystemUiVisibility(
-                      View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-                      | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-                  );
-
-                  if (android.os.Build.VERSION.SDK_INT >= 29) {
-                      getWindow().setNavigationBarContrastEnforced(false);
-                  }
-              }
 
               @Override
               @SuppressWarnings("deprecation")
@@ -122,20 +94,17 @@ jobs:
                   }
 
                   WebView webView = getBridge().getWebView();
-                  String currentUrl = webView.getUrl();
+                  String url = webView.getUrl();
 
-                  // On the local home page, Back should close the app.
-                  if (currentUrl != null
-                      && (currentUrl.equals("http://localhost/")
-                      || currentUrl.equals("http://localhost/index.html")
-                      || currentUrl.equals("https://localhost/")
-                      || currentUrl.equals("https://localhost/index.html"))) {
+                  boolean isHome = url != null &&
+                      (url.equals("http://localhost/") ||
+                       url.equals("http://localhost/index.html") ||
+                       url.equals("https://localhost/") ||
+                       url.equals("https://localhost/index.html"));
+
+                  if (isHome) {
                       finish();
-                      return;
-                  }
-
-                  // On another page, return to the previous page.
-                  if (webView.canGoBack()) {
+                  } else if (webView.canGoBack()) {
                       webView.goBack();
                   } else {
                       finish();
@@ -144,44 +113,10 @@ jobs:
           }
           EOF
 
-      - name: Prepare App Logo
-        shell: bash
-        run: |
-          set -e
-
-          mkdir -p assets
-
-          LOGO_FILE="$(find www -type f \
-            \( -iname 'logo.png' \
-            -o -iname 'icon.png' \
-            -o -iname 'app-icon.png' \
-            -o -iname 'nabha.png' \) \
-            | head -n 1)"
-
-          if [ -n "$LOGO_FILE" ]; then
-            echo "Logo found: $LOGO_FILE"
-            cp "$LOGO_FILE" assets/icon.png
-          else
-            echo "No supported logo filename found."
-            echo "Existing default Android icon will be retained."
-          fi
-
-      - name: Generate Android App Icon
-        shell: bash
-        run: |
-          set -e
-
-          if [ -f assets/icon.png ]; then
-            npm install --no-save @capacitor/assets@latest
-            npx capacitor-assets generate --android
-          else
-            echo "Skipping icon generation."
-          fi
-
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Build Debug APK
+      - name: Build debug APK
         run: |
           cd android
           chmod +x gradlew
@@ -190,6 +125,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SecuritySupport-APK
+          name: Security Support-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
