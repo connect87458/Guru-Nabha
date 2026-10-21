@@ -34,7 +34,7 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
-      - name: Extract website
+      - name: Extract website and logo
         shell: bash
         run: |
           set -e
@@ -49,16 +49,30 @@ jobs:
             exit 1
           fi
 
+          LOGO_FILE="$(find website -type f -name logo.png | head -n 1)"
+
+          if [ -z "$LOGO_FILE" ]; then
+            echo "ERROR: logo.png not found in Security Support.zip"
+            exit 1
+          fi
+
           WEBSITE_ROOT="$(dirname "$INDEX_FILE")"
+
           mkdir -p www
           cp -R "$WEBSITE_ROOT"/. www/
 
+          mkdir -p assets
+          cp "$LOGO_FILE" assets/logo.png
+
           echo "Website files copied successfully."
+          echo "Logo found: $LOGO_FILE"
+
           ls -la www
 
       - name: Create Capacitor project
         run: |
           set -e
+
           npm init -y
           npm install @capacitor/core@latest @capacitor/android@latest
           npm install --save-dev @capacitor/cli@latest
@@ -66,14 +80,89 @@ jobs:
           npx cap init "Security Support" "com.securitysupport.app" --web-dir www
           npx cap add android
 
+      - name: Generate Android app icons
+        shell: bash
+        run: |
+          set -e
+
+          npm install --no-save sharp
+
+          node <<'NODE'
+          const sharp = require('sharp');
+          const fs = require('fs');
+          const path = require('path');
+
+          async function main() {
+            const source = 'assets/logo.png';
+            const base = 'android/app/src/main/res';
+
+            const icons = [
+              ['mipmap-mdpi', 48],
+              ['mipmap-hdpi', 72],
+              ['mipmap-xhdpi', 96],
+              ['mipmap-xxhdpi', 144],
+              ['mipmap-xxxhdpi', 192]
+            ];
+
+            for (const [folder, size] of icons) {
+              const dir = path.join(base, folder);
+              fs.mkdirSync(dir, { recursive: true });
+
+              const image = sharp(source)
+                .resize(size, size, {
+                  fit: 'contain',
+                  background: { r: 255, g: 255, b: 255, alpha: 0 }
+                });
+
+              await image.clone().png().toFile(
+                path.join(dir, 'ic_launcher.png')
+              );
+
+              await image.clone().png().toFile(
+                path.join(dir, 'ic_launcher_round.png')
+              );
+            }
+
+            const anydpi = path.join(base, 'mipmap-anydpi-v26');
+            fs.mkdirSync(anydpi, { recursive: true });
+
+            fs.writeFileSync(
+              path.join(anydpi, 'ic_launcher.xml'),
+              `<?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@android:color/white" />
+              <foreground android:drawable="@mipmap/ic_launcher" />
+          </adaptive-icon>`
+            );
+
+            fs.writeFileSync(
+              path.join(anydpi, 'ic_launcher_round.xml'),
+              `<?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@android:color/white" />
+              <foreground android:drawable="@mipmap/ic_launcher" />
+          </adaptive-icon>`
+            );
+
+            console.log('Android launcher icons generated.');
+          }
+
+          main().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+
       - name: Configure Android Back Button
         shell: bash
         run: |
           set -e
 
-          mkdir -p android/app/src/main/java/com/securitysupport/app
+          MAIN_ACTIVITY="android/app/src/main/java/com/securitysupport/app/MainActivity.java"
 
-          cat > android/app/src/main/java/com/securitysupport/app/MainActivity.java <<'EOF'
+          mkdir -p "$(dirname "$MAIN_ACTIVITY")"
+
+          cat > "$MAIN_ACTIVITY" <<'JAVA'
           package com.securitysupport.app;
 
           import android.webkit.WebView;
@@ -99,7 +188,7 @@ jobs:
                   }
               }
           }
-          EOF
+          JAVA
 
       - name: Sync Capacitor
         run: npx cap sync android
