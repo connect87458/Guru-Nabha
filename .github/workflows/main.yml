@@ -54,20 +54,22 @@ jobs:
           mkdir -p www
           cp -R "$WEBSITE_ROOT"/. www/
 
-          echo "Website files copied successfully."
+          echo "Website extracted successfully."
+          ls -la www
 
       - name: Create Capacitor project
         run: |
           set -e
 
           npm init -y
+
           npm install @capacitor/core@7 @capacitor/android@7
           npm install --save-dev @capacitor/cli@7
 
           npx cap init "Security Support" "com.securitysupport.app" --web-dir www
           npx cap add android
 
-      - name: Configure Android Window and Back Button
+      - name: Configure Android Back Button and Layout
         shell: bash
         run: |
           set -e
@@ -77,77 +79,109 @@ jobs:
           cat > android/app/src/main/java/com/securitysupport/app/MainActivity.java <<'EOF'
           package com.securitysupport.app;
 
-          import android.graphics.Color;
-          import android.os.Build;
           import android.os.Bundle;
+          import android.graphics.Color;
           import android.view.View;
-          import android.widget.Toast;
+          import android.webkit.WebView;
+
+          import androidx.core.view.WindowCompat;
 
           import com.getcapacitor.BridgeActivity;
 
           public class MainActivity extends BridgeActivity {
 
-              private long lastBackPress = 0;
-
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
 
+                  // Keep app content inside the system-bar boundaries.
+                  WindowCompat.setDecorFitsSystemWindows(
+                      getWindow(), true
+                  );
+
                   getWindow().setStatusBarColor(Color.WHITE);
                   getWindow().setNavigationBarColor(Color.WHITE);
 
-                  if (Build.VERSION.SDK_INT >= 29) {
+                  getWindow().getDecorView().setSystemUiVisibility(
+                      View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                      | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                  );
+
+                  if (android.os.Build.VERSION.SDK_INT >= 29) {
                       getWindow().setNavigationBarContrastEnforced(false);
-                  }
-
-                  if (Build.VERSION.SDK_INT >= 30) {
-                      getWindow().setDecorFitsSystemWindows(true);
-                  } else {
-                      getWindow().getDecorView().setSystemUiVisibility(
-                          View.SYSTEM_UI_FLAG_VISIBLE
-                      );
-                  }
-
-                  if (Build.VERSION.SDK_INT >= 23) {
-                      getWindow().getDecorView().setSystemUiVisibility(
-                          View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-                          | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-                      );
                   }
               }
 
               @Override
               @SuppressWarnings("deprecation")
               public void onBackPressed() {
-                  if (getBridge() != null
-                      && getBridge().getWebView() != null
-                      && getBridge().getWebView().canGoBack()) {
-
-                      getBridge().getWebView().goBack();
+                  if (getBridge() == null
+                      || getBridge().getWebView() == null) {
+                      super.onBackPressed();
                       return;
                   }
 
-                  long now = System.currentTimeMillis();
+                  WebView webView = getBridge().getWebView();
+                  String currentUrl = webView.getUrl();
 
-                  if (now - lastBackPress < 2000) {
+                  // On the local home page, Back should close the app.
+                  if (currentUrl != null
+                      && (currentUrl.equals("http://localhost/")
+                      || currentUrl.equals("http://localhost/index.html")
+                      || currentUrl.equals("https://localhost/")
+                      || currentUrl.equals("https://localhost/index.html"))) {
                       finish();
-                  } else {
-                      lastBackPress = now;
+                      return;
+                  }
 
-                      Toast.makeText(
-                          this,
-                          "Press back again to exit",
-                          Toast.LENGTH_SHORT
-                      ).show();
+                  // On another page, return to the previous page.
+                  if (webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      finish();
                   }
               }
           }
           EOF
 
+      - name: Prepare App Logo
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p assets
+
+          LOGO_FILE="$(find www -type f \
+            \( -iname 'logo.png' \
+            -o -iname 'icon.png' \
+            -o -iname 'app-icon.png' \
+            -o -iname 'nabha.png' \) \
+            | head -n 1)"
+
+          if [ -n "$LOGO_FILE" ]; then
+            echo "Logo found: $LOGO_FILE"
+            cp "$LOGO_FILE" assets/icon.png
+          else
+            echo "No supported logo filename found."
+            echo "Existing default Android icon will be retained."
+          fi
+
+      - name: Generate Android App Icon
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f assets/icon.png ]; then
+            npm install --no-save @capacitor/assets@latest
+            npx capacitor-assets generate --android
+          else
+            echo "Skipping icon generation."
+          fi
+
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Build debug APK
+      - name: Build Debug APK
         run: |
           cd android
           chmod +x gradlew
