@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "SecuritySupport.zip"
+      - "Security Support.zip"
       - ".github/workflows/main.yml"
 
 permissions:
@@ -40,12 +40,12 @@ jobs:
           set -e
 
           mkdir -p website
-          unzip -o SecuritySupport.zip -d website
+          unzip -o "Security Support.zip" -d website
 
           INDEX_FILE="$(find website -type f -name index.html | head -n 1)"
 
           if [ -z "$INDEX_FILE" ]; then
-            echo "ERROR: index.html not found in SecuritySupport.zip"
+           echo "ERROR: index.html not found in Security Support.zip"
             exit 1
           fi
 
