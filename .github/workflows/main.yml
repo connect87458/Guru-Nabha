@@ -112,10 +112,24 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Apply Security Support Logo
+      - name: Configure Security Support App Icon
         shell: bash
         run: |
           set -e
+
+          LOGO="assets/logo.png"
+          RES="android/app/src/main/res"
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          test -f "$LOGO" || {
+            echo "ERROR: logo.png not found"
+            exit 1
+          }
+
+          test -f "$MANIFEST" || {
+            echo "ERROR: AndroidManifest.xml not found"
+            exit 1
+          }
 
           npm install --no-save sharp
 
@@ -145,7 +159,12 @@ jobs:
                 'ic_launcher_round.png'
               ]) {
                 await sharp(source)
-                  .resize(size, size, { fit: 'contain' })
+                  .resize(size, size, {
+                    fit: 'contain',
+                    background: {
+                      r: 255, g: 255, b: 255, alpha: 1
+                    }
+                  })
                   .png()
                   .toFile(path.join(dir, name));
               }
@@ -160,7 +179,9 @@ jobs:
             await sharp(source)
               .resize(432, 432, {
                 fit: 'contain',
-                background: { r: 0, g: 0, b: 0, alpha: 0 }
+                background: {
+                  r: 0, g: 0, b: 0, alpha: 0
+                }
               })
               .png()
               .toFile(
@@ -171,7 +192,8 @@ jobs:
           <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
               <background android:drawable="@android:color/white" />
               <foreground android:drawable="@drawable/ic_launcher_foreground" />
-          </adaptive-icon>`;
+          </adaptive-icon>
+          `;
 
             fs.writeFileSync(
               path.join(adaptiveDir, 'ic_launcher.xml'),
@@ -183,7 +205,7 @@ jobs:
               xml
             );
 
-            console.log('Launcher icons generated.');
+            console.log('Security Support icon resources generated.');
           }
 
           main().catch(error => {
@@ -191,6 +213,44 @@ jobs:
             process.exit(1);
           });
           NODE
+
+          # Ensure the manifest uses the generated launcher icon.
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          text = manifest.read_text(encoding="utf-8")
+
+          if not re.search(r'<application\b', text):
+              raise SystemExit("ERROR: <application> tag not found")
+
+          app_match = re.search(r'<application\b[^>]*>', text)
+          app_tag = app_match.group(0)
+
+          if re.search(r'\bandroid:icon\s*=', app_tag):
+              app_tag = re.sub(
+                  r'\bandroid:icon\s*=\s*"[^"]*"',
+                  'android:icon="@mipmap/ic_launcher"',
+                  app_tag
+              )
+          else:
+              app_tag = app_tag[:-1] + ' android:icon="@mipmap/ic_launcher">'
+
+          if re.search(r'\bandroid:roundIcon\s*=', app_tag):
+              app_tag = re.sub(
+                  r'\bandroid:roundIcon\s*=\s*"[^"]*"',
+                  'android:roundIcon="@mipmap/ic_launcher_round"',
+                  app_tag
+              )
+          else:
+              app_tag = app_tag[:-1] + ' android:roundIcon="@mipmap/ic_launcher_round">'
+
+          text = text[:app_match.start()] + app_tag + text[app_match.end():]
+          manifest.write_text(text, encoding="utf-8")
+
+          print("Manifest launcher icon references configured.")
+          PY
 
       - name: Set Android app name
         shell: bash
@@ -200,7 +260,11 @@ jobs:
           STRINGS_FILE="android/app/src/main/res/values/strings.xml"
 
           if [ -f "$STRINGS_FILE" ]; then
-            sed -i 's/<string name="app_name">[^<]*<\/string>/<string name="app_name">Security Support<\/string>/' "$STRINGS_FILE"
+            if grep -q 'name="app_name"' "$STRINGS_FILE"; then
+              sed -i 's/<string name="app_name">[^<]*<\/string>/<string name="app_name">Security Support<\/string>/' "$STRINGS_FILE"
+            else
+              sed -i 's#</resources>#    <string name="app_name">Security Support</string>\n</resources>#' "$STRINGS_FILE"
+            fi
           fi
 
       - name: Build debug APK
