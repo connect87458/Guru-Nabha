@@ -72,7 +72,7 @@ jobs:
 
           npx cap add android
 
-      - name: Setup App Logo
+      - name: Generate Android App Icons
         shell: bash
         run: |
           set -e
@@ -84,50 +84,85 @@ jobs:
 
           npm install --no-save sharp
 
-          mkdir -p scripts
-
-          cat > scripts/generate-icons.cjs <<'EOF'
+          cat > generate-icons.cjs <<'EOF'
           const fs = require('fs');
           const path = require('path');
           const sharp = require('sharp');
 
           const source = path.resolve('logo.png');
-          const output = path.resolve('android/app/src/main/res');
+          const res = path.resolve('android/app/src/main/res');
 
-          const sizes = {
-            'mipmap-mdpi': 48,
-            'mipmap-hdpi': 72,
-            'mipmap-xhdpi': 96,
-            'mipmap-xxhdpi': 144,
-            'mipmap-xxxhdpi': 192
-          };
+          async function saveIcon(file, size, background) {
+            const dir = path.dirname(file);
+            fs.mkdirSync(dir, { recursive: true });
+
+            await sharp(source)
+              .resize(size, size, {
+                fit: 'contain',
+                background
+              })
+              .png()
+              .toFile(file);
+          }
 
           async function main() {
-            for (const [folder, size] of Object.entries(sizes)) {
-              const dir = path.join(output, folder);
+            const legacy = {
+              'mipmap-mdpi': 48,
+              'mipmap-hdpi': 72,
+              'mipmap-xhdpi': 96,
+              'mipmap-xxhdpi': 144,
+              'mipmap-xxxhdpi': 192
+            };
 
-              fs.mkdirSync(dir, { recursive: true });
-
-              const icon = await sharp(source)
-                .resize(size, size, {
-                  fit: 'contain',
-                  background: { r: 255, g: 255, b: 255, alpha: 0 }
-                })
-                .png()
-                .toBuffer();
-
-              fs.writeFileSync(
-                path.join(dir, 'ic_launcher.png'),
-                icon
+            for (const [folder, size] of Object.entries(legacy)) {
+              await saveIcon(
+                path.join(res, folder, 'ic_launcher.png'),
+                size,
+                { r: 255, g: 255, b: 255, alpha: 0 }
               );
 
-              fs.writeFileSync(
-                path.join(dir, 'ic_launcher_round.png'),
-                icon
+              await saveIcon(
+                path.join(res, folder, 'ic_launcher_round.png'),
+                size,
+                { r: 255, g: 255, b: 255, alpha: 0 }
               );
             }
 
-            console.log('All launcher icons generated successfully.');
+            const foregroundDir = path.join(res, 'drawable');
+            fs.mkdirSync(foregroundDir, { recursive: true });
+
+            // Android adaptive icons use a foreground layer.
+            // Fit the full logo inside a safe area.
+            await sharp(source)
+              .resize(432, 432, {
+                fit: 'contain',
+                background: { r: 0, g: 0, b: 0, alpha: 0 }
+              })
+              .png()
+              .toFile(path.join(foregroundDir, 'ic_launcher_foreground.png'));
+
+            const anydpi = path.join(res, 'mipmap-anydpi-v26');
+            fs.mkdirSync(anydpi, { recursive: true });
+
+            fs.writeFileSync(
+              path.join(anydpi, 'ic_launcher.xml'),
+              `<?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@android:color/white"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>`
+            );
+
+            fs.writeFileSync(
+              path.join(anydpi, 'ic_launcher_round.xml'),
+              `<?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@android:color/white"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>`
+            );
+
+            console.log('Legacy and adaptive icons generated.');
           }
 
           main().catch(error => {
@@ -136,7 +171,7 @@ jobs:
           });
           EOF
 
-          node scripts/generate-icons.cjs
+          node generate-icons.cjs
 
       - name: Configure Android Back Button
         shell: bash
@@ -176,7 +211,7 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Verify Android Launcher Icon
+      - name: Set Android Launcher Icons
         shell: bash
         run: |
           set -e
@@ -188,22 +223,44 @@ jobs:
             exit 1
           fi
 
-          if ! grep -q 'android:icon="@mipmap/ic_launcher"' "$MANIFEST"; then
-            echo "ERROR: Expected launcher icon reference not found."
-            cat "$MANIFEST"
-            exit 1
-          fi
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
 
-          for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
-            ICON="android/app/src/main/res/mipmap-${density}/ic_launcher.png"
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          text = manifest.read_text()
 
-            if [ ! -f "$ICON" ]; then
-              echo "ERROR: Missing launcher icon: $ICON"
-              exit 1
-            fi
-          done
+          if not re.search(r'<application\b', text):
+              raise SystemExit("ERROR: application tag not found")
 
-          echo "Launcher icon configuration verified."
+          def set_attribute(content, name, value):
+              pattern = rf'(\b{re.escape(name)}\s*=\s*")[^"]*(")'
+              if re.search(pattern, content):
+                  return re.sub(pattern, rf'\g<1>{value}\g<2>', content, count=1)
+              return content
+
+          match = re.search(r'<application\b[^>]*>', text, re.DOTALL)
+          tag = match.group(0)
+
+          tag = set_attribute(tag, 'android:icon', '@mipmap/ic_launcher')
+          tag = set_attribute(tag, 'android:roundIcon', '@mipmap/ic_launcher_round')
+
+          text = text[:match.start()] + tag + text[match.end():]
+          manifest.write_text(text)
+          print("Launcher icon references configured.")
+          PY
+
+          echo "Verifying generated icons..."
+
+          test -f android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          test -f android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          test -f android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          test -f android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          test -f android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          test -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          test -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+
+          echo "All launcher icon files are ready."
 
       - name: Build debug APK
         shell: bash
