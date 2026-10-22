@@ -34,24 +34,24 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
+      # Extract website and find the existing logo
       - name: Extract website and logo
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
+
+          test -f "Security Support.zip" || {
+            echo "ERROR: Security Support.zip not found"
+            exit 1
+          }
 
           mkdir -p website
           unzip -o "Security Support.zip" -d website
 
-          INDEX_FILE="$(find website -type f -name index.html | head -n 1)"
-          LOGO_FILE="$(find website -type f -name logo.png | head -n 1)"
+          INDEX_FILE="$(find website -type f -name index.html -print -quit)"
 
           if [ -z "$INDEX_FILE" ]; then
-            echo "ERROR: index.html not found"
-            exit 1
-          fi
-
-          if [ -z "$LOGO_FILE" ]; then
-            echo "ERROR: logo.png not found"
+            echo "ERROR: index.html not found in ZIP"
             exit 1
           fi
 
@@ -59,26 +59,52 @@ jobs:
 
           mkdir -p www assets
           cp -R "$WEBSITE_ROOT"/. www/
+
+          # Prefer logo.png from the website root.
+          if [ -f "$WEBSITE_ROOT/logo.png" ]; then
+            LOGO_FILE="$WEBSITE_ROOT/logo.png"
+          else
+            LOGO_FILE="$(find website -type f -name logo.png -print -quit)"
+          fi
+
+          if [ -z "$LOGO_FILE" ] || [ ! -f "$LOGO_FILE" ]; then
+            echo "ERROR: logo.png not found in ZIP"
+            exit 1
+          fi
+
           cp "$LOGO_FILE" assets/logo.png
 
-          echo "Website and logo extracted."
+          echo "Website root: $WEBSITE_ROOT"
+          echo "Logo source: $LOGO_FILE"
+          echo "Website files:"
+          ls -la www
 
+          echo "Logo file:"
+          ls -lh assets/logo.png
+
+      # Create the Android application
       - name: Create Capacitor project
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
+
           npm init -y
+
           npm install @capacitor/core@latest @capacitor/android@latest
           npm install --save-dev @capacitor/cli@latest
 
           npx cap init "Security Support" "com.securitysupport.app" --web-dir www
+
           npx cap add android
 
+      # Android Back Button
       - name: Configure Android Back Button
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           MAIN_ACTIVITY="android/app/src/main/java/com/securitysupport/app/MainActivity.java"
+
           mkdir -p "$(dirname "$MAIN_ACTIVITY")"
 
           cat > "$MAIN_ACTIVITY" <<'JAVA'
@@ -92,6 +118,7 @@ jobs:
               @Override
               @SuppressWarnings("deprecation")
               public void onBackPressed() {
+
                   if (getBridge() == null
                       || getBridge().getWebView() == null) {
                       super.onBackPressed();
@@ -109,20 +136,22 @@ jobs:
           }
           JAVA
 
+      # Sync Android resources before configuring the launcher icon
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Configure Security Support App Icon
+      # Generate all launcher icons from logo.png
+      - name: Configure Security Support Launcher Icon
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           LOGO="assets/logo.png"
           RES="android/app/src/main/res"
           MANIFEST="android/app/src/main/AndroidManifest.xml"
 
           test -f "$LOGO" || {
-            echo "ERROR: logo.png not found"
+            echo "ERROR: assets/logo.png not found"
             exit 1
           }
 
@@ -142,6 +171,17 @@ jobs:
           const res = 'android/app/src/main/res';
 
           async function main() {
+            const metadata = await sharp(source).metadata();
+
+            if (!metadata.width || !metadata.height) {
+              throw new Error('logo.png has invalid image dimensions');
+            }
+
+            console.log(
+              `Source logo dimensions: ${metadata.width}x${metadata.height}`
+            );
+
+            // Legacy launcher icons for Android devices.
             const sizes = {
               'mipmap-mdpi': 48,
               'mipmap-hdpi': 72,
@@ -158,54 +198,111 @@ jobs:
                 'ic_launcher.png',
                 'ic_launcher_round.png'
               ]) {
+                const output = path.join(dir, name);
+
+                if (fs.existsSync(output)) {
+                  fs.rmSync(output);
+                }
+
                 await sharp(source)
                   .resize(size, size, {
                     fit: 'contain',
                     background: {
-                      r: 255, g: 255, b: 255, alpha: 1
+                      r: 255,
+                      g: 255,
+                      b: 255,
+                      alpha: 1
                     }
                   })
                   .png()
-                  .toFile(path.join(dir, name));
+                  .toFile(output);
               }
             }
 
-            const adaptiveDir = path.join(res, 'mipmap-anydpi-v26');
+            // Adaptive launcher icon resources.
+            const adaptiveDir = path.join(
+              res,
+              'mipmap-anydpi-v26'
+            );
+
             const drawableDir = path.join(res, 'drawable');
+            const valuesDir = path.join(res, 'values');
 
             fs.mkdirSync(adaptiveDir, { recursive: true });
             fs.mkdirSync(drawableDir, { recursive: true });
+            fs.mkdirSync(valuesDir, { recursive: true });
 
-            await sharp(source)
-              .resize(432, 432, {
-                fit: 'contain',
+            // Keep the logo inside the adaptive-icon safe area.
+            const foregroundPath = path.join(
+              drawableDir,
+              'ic_launcher_foreground.png'
+            );
+
+            if (fs.existsSync(foregroundPath)) {
+              fs.rmSync(foregroundPath);
+            }
+
+            await sharp({
+              create: {
+                width: 432,
+                height: 432,
+                channels: 4,
                 background: {
-                  r: 0, g: 0, b: 0, alpha: 0
+                  r: 0,
+                  g: 0,
+                  b: 0,
+                  alpha: 0
                 }
-              })
+              }
+            })
+              .composite([
+                {
+                  input: await sharp(source)
+                    .resize(288, 288, {
+                      fit: 'contain',
+                      background: {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        alpha: 0
+                      }
+                    })
+                    .png()
+                    .toBuffer(),
+                  gravity: 'centre'
+                }
+              ])
               .png()
-              .toFile(
-                path.join(drawableDir, 'ic_launcher_foreground.png')
+              .toFile(foregroundPath);
+
+            // Adaptive icon background color.
+            const colorsPath = path.join(valuesDir, 'colors.xml');
+
+            let colorsXml = '<?xml version="1.0" encoding="utf-8"?>\n' +
+              '<resources>\n' +
+              '    <color name="ic_launcher_background">#FFFFFF</color>\n' +
+              '</resources>\n';
+
+            fs.writeFileSync(colorsPath, colorsXml);
+
+            const adaptiveXml =
+              '<?xml version="1.0" encoding="utf-8"?>\n' +
+              '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n' +
+              '    <background android:drawable="@color/ic_launcher_background" />\n' +
+              '    <foreground android:drawable="@drawable/ic_launcher_foreground" />\n' +
+              '</adaptive-icon>\n';
+
+            for (const name of [
+              'ic_launcher.xml',
+              'ic_launcher_round.xml'
+            ]) {
+              fs.writeFileSync(
+                path.join(adaptiveDir, name),
+                adaptiveXml
               );
+            }
 
-            const xml = `<?xml version="1.0" encoding="utf-8"?>
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@android:color/white" />
-              <foreground android:drawable="@drawable/ic_launcher_foreground" />
-          </adaptive-icon>
-          `;
-
-            fs.writeFileSync(
-              path.join(adaptiveDir, 'ic_launcher.xml'),
-              xml
-            );
-
-            fs.writeFileSync(
-              path.join(adaptiveDir, 'ic_launcher_round.xml'),
-              xml
-            );
-
-            console.log('Security Support icon resources generated.');
+            console.log('Launcher icons generated successfully.');
           }
 
           main().catch(error => {
@@ -214,65 +311,155 @@ jobs:
           });
           NODE
 
-          # Ensure the manifest uses the generated launcher icon.
+          # Explicitly configure both launcher icon references.
           python3 <<'PY'
           from pathlib import Path
           import re
 
-          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          manifest = Path(
+              "android/app/src/main/AndroidManifest.xml"
+          )
+
           text = manifest.read_text(encoding="utf-8")
 
-          if not re.search(r'<application\b', text):
-              raise SystemExit("ERROR: <application> tag not found")
+          match = re.search(
+              r'<application\b[^>]*>',
+              text,
+              flags=re.DOTALL
+          )
 
-          app_match = re.search(r'<application\b[^>]*>', text)
-          app_tag = app_match.group(0)
-
-          if re.search(r'\bandroid:icon\s*=', app_tag):
-              app_tag = re.sub(
-                  r'\bandroid:icon\s*=\s*"[^"]*"',
-                  'android:icon="@mipmap/ic_launcher"',
-                  app_tag
+          if not match:
+              raise SystemExit(
+                  "ERROR: <application> tag not found in manifest"
               )
-          else:
-              app_tag = app_tag[:-1] + ' android:icon="@mipmap/ic_launcher">'
 
-          if re.search(r'\bandroid:roundIcon\s*=', app_tag):
-              app_tag = re.sub(
-                  r'\bandroid:roundIcon\s*=\s*"[^"]*"',
-                  'android:roundIcon="@mipmap/ic_launcher_round"',
-                  app_tag
-              )
-          else:
-              app_tag = app_tag[:-1] + ' android:roundIcon="@mipmap/ic_launcher_round">'
+          tag = match.group(0)
 
-          text = text[:app_match.start()] + app_tag + text[app_match.end():]
+          attributes = {
+              "android:icon": "@mipmap/ic_launcher",
+              "android:roundIcon": "@mipmap/ic_launcher_round"
+          }
+
+          for attribute, value in attributes.items():
+              pattern = rf'\b{re.escape(attribute)}\s*=\s*"[^"]*"'
+
+              if re.search(pattern, tag):
+                  tag = re.sub(
+                      pattern,
+                      f'{attribute}="{value}"',
+                      tag
+                  )
+              else:
+                  tag = tag[:-1] + f' {attribute}="{value}">'
+
+          text = text[:match.start()] + tag + text[match.end():]
+
           manifest.write_text(text, encoding="utf-8")
 
           print("Manifest launcher icon references configured.")
           PY
 
-      - name: Set Android app name
+          echo "Configured launcher resources:"
+          find "$RES" -type f \( \
+            -name 'ic_launcher.png' -o \
+            -name 'ic_launcher_round.png' -o \
+            -name 'ic_launcher.xml' -o \
+            -name 'ic_launcher_round.xml' -o \
+            -name 'ic_launcher_foreground.png' \
+          \) -print
+
+      # Set the displayed Android application name
+      - name: Set Android App Name
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           STRINGS_FILE="android/app/src/main/res/values/strings.xml"
 
-          if [ -f "$STRINGS_FILE" ]; then
-            if grep -q 'name="app_name"' "$STRINGS_FILE"; then
-              sed -i 's/<string name="app_name">[^<]*<\/string>/<string name="app_name">Security Support<\/string>/' "$STRINGS_FILE"
-            else
-              sed -i 's#</resources>#    <string name="app_name">Security Support</string>\n</resources>#' "$STRINGS_FILE"
-            fi
+          if [ ! -f "$STRINGS_FILE" ]; then
+            echo "ERROR: strings.xml not found"
+            exit 1
           fi
 
-      - name: Build debug APK
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          file = Path(
+              "android/app/src/main/res/values/strings.xml"
+          )
+
+          text = file.read_text(encoding="utf-8")
+
+          pattern = (
+              r'<string\s+name="app_name"[^>]*>.*?</string>'
+          )
+
+          replacement = (
+              '<string name="app_name">Security Support</string>'
+          )
+
+          if re.search(pattern, text, flags=re.DOTALL):
+              text = re.sub(
+                  pattern,
+                  replacement,
+                  text,
+                  count=1,
+                  flags=re.DOTALL
+              )
+          else:
+              if "</resources>" not in text:
+                  raise SystemExit(
+                      "ERROR: </resources> not found in strings.xml"
+                  )
+
+              text = text.replace(
+                  "</resources>",
+                  f"    {replacement}\n</resources>",
+                  1
+              )
+
+          file.write_text(text, encoding="utf-8")
+
+          print("Android app name set to Security Support.")
+          PY
+
+      # Build APK
+      - name: Build Debug APK
+        shell: bash
         run: |
+          set -euo pipefail
+
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew --no-daemon clean assembleDebug
 
+      # Verify that APK contains the expected launcher icon
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+
+          test -f "$APK" || {
+            echo "ERROR: APK was not generated"
+            exit 1
+          }
+
+          test -x "$AAPT" || {
+            echo "ERROR: Android aapt tool not found"
+            exit 1
+          }
+
+          echo "Checking application name and launcher resources..."
+          "$AAPT" dump badging "$APK" | head -n 12
+
+          echo "APK generated successfully."
+          ls -lh "$APK"
+
+      # Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
