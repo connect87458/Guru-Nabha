@@ -35,79 +35,117 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
-      # Extract website and select logo
-      - name: Extract Website and Select Logo
+      - name: Extract website
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          test -f "Security Support.zip" || {
-            echo "ERROR: Security Support.zip not found"
-            exit 1
-          }
-
-          mkdir -p website www assets
+          mkdir -p website
           unzip -o "Security Support.zip" -d website
 
-          INDEX_FILE="$(find website -type f -name index.html -print -quit)"
+          INDEX_FILE="$(find website -type f -name index.html | head -n 1)"
 
           if [ -z "$INDEX_FILE" ]; then
-            echo "ERROR: index.html not found inside ZIP"
+            echo "ERROR: index.html not found in Security Support.zip"
             exit 1
           fi
 
           WEBSITE_ROOT="$(dirname "$INDEX_FILE")"
 
+          mkdir -p www
           cp -R "$WEBSITE_ROOT"/. www/
 
-          # Prefer repository-root logo.png.
-          # Fall back to the logo inside the ZIP.
-          if [ -f "logo.png" ]; then
-            LOGO_FILE="logo.png"
-            echo "Selected logo: repository-root logo.png"
-          else
-            LOGO_FILE="$(find website -type f -name logo.png -print -quit)"
-
-            if [ -z "$LOGO_FILE" ] || [ ! -f "$LOGO_FILE" ]; then
-              echo "ERROR: logo.png not found inside or outside ZIP"
-              exit 1
-            fi
-
-            echo "Selected logo from ZIP: $LOGO_FILE"
-          fi
-
-          cp "$LOGO_FILE" assets/logo.png
-
-          echo "Selected icon source:"
-          ls -lh assets/logo.png
-
-          echo "Website files copied:"
+          echo "Website files copied successfully."
           ls -la www
 
-      # Create Capacitor project
-      - name: Create Capacitor Project
+      - name: Create Capacitor project
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           npm init -y
+
           npm install @capacitor/core@latest @capacitor/android@latest
           npm install --save-dev @capacitor/cli@latest
 
           npx cap init "Security Support" "com.securitysupport.app" --web-dir www
+
           npx cap add android
 
-      # Android Back Button
+      - name: Setup App Logo
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -f "logo.png" ]; then
+            echo "ERROR: logo.png not found in repository root."
+            exit 1
+          fi
+
+          npm install --no-save sharp
+
+          mkdir -p scripts
+
+          cat > scripts/generate-icons.cjs <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const sharp = require('sharp');
+
+          const source = path.resolve('logo.png');
+          const output = path.resolve('android/app/src/main/res');
+
+          const sizes = {
+            'mipmap-mdpi': 48,
+            'mipmap-hdpi': 72,
+            'mipmap-xhdpi': 96,
+            'mipmap-xxhdpi': 144,
+            'mipmap-xxxhdpi': 192
+          };
+
+          async function main() {
+            for (const [folder, size] of Object.entries(sizes)) {
+              const dir = path.join(output, folder);
+
+              fs.mkdirSync(dir, { recursive: true });
+
+              const icon = await sharp(source)
+                .resize(size, size, {
+                  fit: 'contain',
+                  background: { r: 255, g: 255, b: 255, alpha: 0 }
+                })
+                .png()
+                .toBuffer();
+
+              fs.writeFileSync(
+                path.join(dir, 'ic_launcher.png'),
+                icon
+              );
+
+              fs.writeFileSync(
+                path.join(dir, 'ic_launcher_round.png'),
+                icon
+              );
+            }
+
+            console.log('All launcher icons generated successfully.');
+          }
+
+          main().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+          EOF
+
+          node scripts/generate-icons.cjs
+
       - name: Configure Android Back Button
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          MAIN_ACTIVITY="android/app/src/main/java/com/securitysupport/app/MainActivity.java"
+          mkdir -p android/app/src/main/java/com/securitysupport/app
 
-          mkdir -p "$(dirname "$MAIN_ACTIVITY")"
-
-          cat > "$MAIN_ACTIVITY" <<'JAVA'
+          cat > android/app/src/main/java/com/securitysupport/app/MainActivity.java <<'EOF'
           package com.securitysupport.app;
 
           import android.webkit.WebView;
@@ -118,8 +156,8 @@ jobs:
               @Override
               @SuppressWarnings("deprecation")
               public void onBackPressed() {
-                  if (getBridge() == null ||
-                      getBridge().getWebView() == null) {
+                  if (getBridge() == null
+                      || getBridge().getWebView() == null) {
                       super.onBackPressed();
                       return;
                   }
@@ -133,300 +171,53 @@ jobs:
                   }
               }
           }
-          JAVA
+          EOF
 
-      # Sync Capacitor
       - name: Sync Capacitor
         run: npx cap sync android
 
-      # Generate Android launcher icons
-      - name: Configure Security Support Launcher Icon
+      - name: Verify Android Launcher Icon
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          LOGO="assets/logo.png"
-          RES="android/app/src/main/res"
           MANIFEST="android/app/src/main/AndroidManifest.xml"
 
-          test -f "$LOGO" || {
-            echo "ERROR: assets/logo.png not found"
+          if [ ! -f "$MANIFEST" ]; then
+            echo "ERROR: AndroidManifest.xml not found."
             exit 1
-          }
+          fi
 
-          npm install --no-save sharp
+          if ! grep -q 'android:icon="@mipmap/ic_launcher"' "$MANIFEST"; then
+            echo "ERROR: Expected launcher icon reference not found."
+            cat "$MANIFEST"
+            exit 1
+          fi
 
-          node <<'NODE'
-          const sharp = require('sharp');
-          const fs = require('fs');
-          const path = require('path');
+          for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            ICON="android/app/src/main/res/mipmap-${density}/ic_launcher.png"
 
-          const source = 'assets/logo.png';
-          const res = 'android/app/src/main/res';
+            if [ ! -f "$ICON" ]; then
+              echo "ERROR: Missing launcher icon: $ICON"
+              exit 1
+            fi
+          done
 
-          async function main() {
-            const metadata = await sharp(source).metadata();
+          echo "Launcher icon configuration verified."
 
-            if (!metadata.width || !metadata.height) {
-              throw new Error('Invalid logo.png image');
-            }
-
-            console.log(
-              `Selected logo dimensions: ${metadata.width}x${metadata.height}`
-            );
-
-            // Standard launcher PNG icons.
-            const sizes = {
-              'mipmap-mdpi': 48,
-              'mipmap-hdpi': 72,
-              'mipmap-xhdpi': 96,
-              'mipmap-xxhdpi': 144,
-              'mipmap-xxxhdpi': 192
-            };
-
-            for (const [folder, size] of Object.entries(sizes)) {
-              const dir = path.join(res, folder);
-              fs.mkdirSync(dir, { recursive: true });
-
-              for (const name of [
-                'ic_launcher.png',
-                'ic_launcher_round.png'
-              ]) {
-                const output = path.join(dir, name);
-
-                if (fs.existsSync(output)) {
-                  fs.rmSync(output);
-                }
-
-                await sharp(source)
-                  .resize(size, size, {
-                    fit: 'contain',
-                    background: {
-                      r: 255,
-                      g: 255,
-                      b: 255,
-                      alpha: 1
-                    }
-                  })
-                  .png()
-                  .toFile(output);
-              }
-            }
-
-            // Adaptive icon foreground.
-            const drawableDir = path.join(res, 'drawable');
-            const adaptiveDir = path.join(res, 'mipmap-anydpi-v26');
-
-            fs.mkdirSync(drawableDir, { recursive: true });
-            fs.mkdirSync(adaptiveDir, { recursive: true });
-
-            const foregroundPath = path.join(
-              drawableDir,
-              'ic_launcher_foreground.png'
-            );
-
-            if (fs.existsSync(foregroundPath)) {
-              fs.rmSync(foregroundPath);
-            }
-
-            await sharp({
-              create: {
-                width: 432,
-                height: 432,
-                channels: 4,
-                background: {
-                  r: 0,
-                  g: 0,
-                  b: 0,
-                  alpha: 0
-                }
-              }
-            })
-              .composite([{
-                input: await sharp(source)
-                  .resize(288, 288, {
-                    fit: 'contain',
-                    background: {
-                      r: 0,
-                      g: 0,
-                      b: 0,
-                      alpha: 0
-                    }
-                  })
-                  .png()
-                  .toBuffer(),
-                gravity: 'centre'
-              }])
-              .png()
-              .toFile(foregroundPath);
-
-            // Use the system white background to avoid duplicate
-            // ic_launcher_background color resources.
-            const adaptiveXml =
-              '<?xml version="1.0" encoding="utf-8"?>\n' +
-              '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n' +
-              '    <background android:drawable="@android:color/white" />\n' +
-              '    <foreground android:drawable="@drawable/ic_launcher_foreground" />\n' +
-              '</adaptive-icon>\n';
-
-            for (const name of [
-              'ic_launcher.xml',
-              'ic_launcher_round.xml'
-            ]) {
-              fs.writeFileSync(
-                path.join(adaptiveDir, name),
-                adaptiveXml
-              );
-            }
-
-            console.log('Launcher icon resources generated.');
-          }
-
-          main().catch(error => {
-            console.error(error);
-            process.exit(1);
-          });
-          NODE
-
-          # Explicitly set launcher icon references.
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          manifest = Path(
-              "android/app/src/main/AndroidManifest.xml"
-          )
-
-          text = manifest.read_text(encoding="utf-8")
-
-          match = re.search(
-              r'<application\b[^>]*>',
-              text,
-              flags=re.DOTALL
-          )
-
-          if not match:
-              raise SystemExit(
-                  "ERROR: <application> tag not found"
-              )
-
-          tag = match.group(0)
-
-          attributes = {
-              "android:icon": "@mipmap/ic_launcher",
-              "android:roundIcon": "@mipmap/ic_launcher_round"
-          }
-
-          for attribute, value in attributes.items():
-              pattern = rf'\b{re.escape(attribute)}\s*=\s*"[^"]*"'
-
-              if re.search(pattern, tag):
-                  tag = re.sub(
-                      pattern,
-                      f'{attribute}="{value}"',
-                      tag
-                  )
-              else:
-                  tag = tag[:-1] + f' {attribute}="{value}">'
-
-          text = text[:match.start()] + tag + text[match.end():]
-
-          manifest.write_text(text, encoding="utf-8")
-
-          print("Launcher icon references set in AndroidManifest.xml")
-          PY
-
-      # Set Android app display name
-      - name: Set Android App Name
+      - name: Build debug APK
         shell: bash
         run: |
-          set -euo pipefail
-
-          STRINGS_FILE="android/app/src/main/res/values/strings.xml"
-
-          test -f "$STRINGS_FILE" || {
-            echo "ERROR: strings.xml not found"
-            exit 1
-          }
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          file = Path(
-              "android/app/src/main/res/values/strings.xml"
-          )
-
-          text = file.read_text(encoding="utf-8")
-
-          pattern = r'<string\s+name="app_name"[^>]*>.*?</string>'
-          replacement = (
-              '<string name="app_name">Security Support</string>'
-          )
-
-          if re.search(pattern, text, flags=re.DOTALL):
-              text = re.sub(
-                  pattern,
-                  replacement,
-                  text,
-                  count=1,
-                  flags=re.DOTALL
-              )
-          else:
-              if "</resources>" not in text:
-                  raise SystemExit(
-                      "ERROR: </resources> not found"
-                  )
-
-              text = text.replace(
-                  "</resources>",
-                  f"    {replacement}\n</resources>",
-                  1
-              )
-
-          file.write_text(text, encoding="utf-8")
-
-          print("App name set to Security Support.")
-          PY
-
-      # Build APK
-      - name: Build Debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
+          set -e
 
           cd android
           chmod +x gradlew
-          ./gradlew --no-daemon clean assembleDebug
+          ./gradlew assembleDebug
 
-      # Verify generated APK
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="android/app/build/outputs/apk/debug/app-debug.apk"
-          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
-
-          test -f "$APK" || {
-            echo "ERROR: APK not generated"
-            exit 1
-          }
-
-          test -x "$AAPT" || {
-            echo "ERROR: aapt tool not found"
-            exit 1
-          }
-
-          "$AAPT" dump badging "$APK" | head -n 12
-
-          echo "APK verification completed."
-          ls -lh "$APK"
-
-      # Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: SecuritySupport-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 7
